@@ -293,7 +293,12 @@
             </span>
             {% endif %}
 
-            {% if 'unit' in cmd and 'details' in cmd %}
+            {% if 'details_link' in cmd %}
+            <a class="btn-details active"
+               href="{{ cmd.details_link }}"
+               target="_blank"
+               rel="noopener noreferrer">Details</a>
+            {% elif ('unit' in cmd or 'process' in cmd) and 'details' in cmd %}
             <a class="btn-details"
                id="det-{{ cmd.id }}"
                href="/details/{{ cmd.id }}">Details</a>
