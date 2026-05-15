@@ -109,7 +109,7 @@ cmake --install .             # user install (no sudo)
 | `~/.local/lib/arkictrl/README.md` | this file (served at `/readme`) |
 | `~/.local/lib/arkictrl/templates/` | HTML templates |
 | `~/.local/etc/arkictrl/commands.conf` | command definitions |
-| `~/.local/lib/systemd/user/arkictrl.service` | systemd user unit |
+| `~/.local/share/systemd/user/arkictrl.service` | systemd user unit |
 
 ---
 
@@ -136,12 +136,10 @@ systemctl --user enable --now arkictrl
 systemctl --user status arkictrl
 ```
 
-If systemd does not find the unit, link it into the user search path:
+To keep the service running after logout (e.g. on a headless machine), enable linger once:
 
 ```bash
-ln -s ~/.local/lib/systemd/user/arkictrl.service \
-      ~/.config/systemd/user/arkictrl.service
-systemctl --user daemon-reload
+loginctl enable-linger $USER
 ```
 
 ### Restarting after config changes
