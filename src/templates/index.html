@@ -380,6 +380,14 @@
     </div>
 </div>
 
+<!-- MPD info panel -->
+<div class="card">
+    <div class="card-title">MPD</div>
+    <div id="mpd-panel" style="padding:4px 0">
+        <span style="color:var(--muted);font-style:italic">loading…</span>
+    </div>
+</div>
+
 <!-- Command groups (all except system) -->
 {% for group_name, group_label, cmds in groups if group_name != 'system' %}
 {{ render_group(group_name, group_label, cmds) }}
@@ -405,6 +413,14 @@
     </div>
 </div>
 
+<!-- Top CPU processes panel -->
+<div class="card">
+    <div class="card-title" id="topcpu-title">Top CPU</div>
+    <div id="topcpu-panel" style="padding:4px 0">
+        <span style="color:var(--muted);font-style:italic">loading…</span>
+    </div>
+</div>
+
 <!-- System group (reboot / poweroff) at the bottom -->
 {% for group_name, group_label, cmds in groups if group_name == 'system' %}
 {{ render_group(group_name, group_label, cmds) }}
@@ -415,6 +431,9 @@
 <div id="toast"></div>
 
 <script>
+const MONITOR_INTERVAL_MS = {{ monitor_interval }} * 1000;
+const TOPCPU_THRESHOLD    = {{ topcpu_threshold }};
+
 // ── toast ──────────────────────────────────────────────────────────────────
 let _tt = null;
 function toast(msg, type = 'ok', ms = 2800) {
@@ -664,6 +683,64 @@ async function fetchBrutefirCpu() {
 }
 fetchBrutefirCpu();
 setInterval(fetchBrutefirCpu, 5000);
+
+// ── MPD info panel ────────────────────────────────────────────────────────
+function monRow(label, value, valueColor) {
+    return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:3px 0">` +
+           `<span style="color:var(--muted);font-size:.82rem;flex-shrink:0;margin-right:12px">${label}</span>` +
+           `<span style="font-family:ui-monospace,monospace;font-size:.78rem;color:${valueColor||'var(--text)'};` +
+           `text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${escHtml(String(value))}</span>` +
+           `</div>`;
+}
+
+async function fetchMpdInfo() {
+    const el = document.getElementById('mpd-panel');
+    try {
+        const d = await (await fetch('/mpd/info')).json();
+        if (!d.ok) { el.innerHTML = `<span style="color:var(--red)">${escHtml(d.error||'error')}</span>`; return; }
+        if (!d.running) { el.innerHTML = '<span style="color:var(--muted);font-style:italic">not running</span>'; return; }
+        el.innerHTML =
+            monRow('Config', d.conf) +
+            monRow('Port',   d.port, 'var(--muted)') +
+            monRow('CPU',    d.cpu.toFixed(1) + '%',
+                   d.cpu > 10 ? 'var(--yellow)' : 'var(--green)');
+    } catch {
+        el.innerHTML = '<span style="color:var(--red)">network error</span>';
+    }
+}
+fetchMpdInfo();
+setInterval(fetchMpdInfo, MONITOR_INTERVAL_MS);
+
+// ── Top CPU processes panel ───────────────────────────────────────────────
+async function fetchTopCpu() {
+    const el    = document.getElementById('topcpu-panel');
+    const title = document.getElementById('topcpu-title');
+    try {
+        const d = await (await fetch('/system/topcpu')).json();
+        if (!d.ok) { el.innerHTML = `<span style="color:var(--red)">${escHtml(d.error||'error')}</span>`; return; }
+        title.textContent = `Top CPU  (> ${d.threshold}%)`;
+        if (d.procs.length === 0) {
+            el.innerHTML = '<span style="color:var(--muted);font-style:italic">idle — nothing above threshold</span>';
+            return;
+        }
+        let html = '';
+        for (const p of d.procs) {
+            const pct   = p.cpu.toFixed(1) + '%';
+            const color = p.cpu >= 50 ? 'var(--red)' : p.cpu >= 20 ? 'var(--yellow)' : 'var(--text)';
+            html += `<div style="display:flex;align-items:baseline;padding:2px 0;gap:6px">` +
+                    `<span style="flex:1;font-size:.83rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.name)}</span>` +
+                    `<span style="color:var(--muted);font-size:.75rem;white-space:nowrap">${escHtml(p.user)}</span>` +
+                    `<span style="font-family:ui-monospace,monospace;font-size:.83rem;color:${color};` +
+                    `width:42px;text-align:right;flex-shrink:0">${pct}</span>` +
+                    `</div>`;
+        }
+        el.innerHTML = html;
+    } catch {
+        el.innerHTML = '<span style="color:var(--red)">network error</span>';
+    }
+}
+fetchTopCpu();
+setInterval(fetchTopCpu, MONITOR_INTERVAL_MS);
 </script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import shlex
 import subprocess
 import configparser
 import markdown as md_lib
@@ -15,6 +16,10 @@ app = Flask(__name__, template_folder=os.path.join(_HERE, "templates"))
 QCONNECT_STATUS_FILE = os.environ.get("QCONNECT_STATUS_FILE", "/tmp/qconnect2mpd-status.txt")
 QCONNECT_LOG_FILE    = os.environ.get("QCONNECT_LOG_FILE",    "/tmp/qconnect2mpd.log")
 
+# [monitor] section defaults
+TOPCPU_THRESHOLD = 4.0   # minimum %CPU to include in the top-processes list
+MONITOR_INTERVAL = 2     # seconds between MPD/top-CPU refreshes
+
 GROUP_ORDER  = ["drc", "apps", "system"]
 GROUP_LABELS = {
     "drc":    "Digital Room Correction",
@@ -28,6 +33,7 @@ CMD_MAP:  dict[str, dict] = {}
 
 def load_config(path: str) -> None:
     global COMMANDS, CMD_MAP, QCONNECT_STATUS_FILE, QCONNECT_LOG_FILE
+    global TOPCPU_THRESHOLD, MONITOR_INTERVAL
     cfg = configparser.ConfigParser()
     if not cfg.read(path):
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -37,9 +43,15 @@ def load_config(path: str) -> None:
         QCONNECT_STATUS_FILE = cfg.get("qconnect", "status_file", fallback=QCONNECT_STATUS_FILE)
         QCONNECT_LOG_FILE    = cfg.get("qconnect", "log_file",    fallback=QCONNECT_LOG_FILE)
 
+    # [monitor] is a settings section — read and skip it.
+    if cfg.has_section("monitor"):
+        TOPCPU_THRESHOLD = cfg.getfloat("monitor", "topcpu_threshold", fallback=TOPCPU_THRESHOLD)
+        MONITOR_INTERVAL = cfg.getint("monitor",   "monitor_interval", fallback=MONITOR_INTERVAL)
+
+    _RESERVED = {"qconnect", "monitor"}
     COMMANDS = []
     for sid in cfg.sections():
-        if sid == "qconnect":
+        if sid in _RESERVED:
             continue
         c = dict(cfg[sid])
         c["id"] = sid
@@ -106,11 +118,54 @@ def _process_running(process: str) -> bool:
         return False
 
 
+# ── MPD helpers ───────────────────────────────────────────────────────────────
+
+def _mpd_conf_from_cmdline(cmdline: str) -> str | None:
+    try:
+        tokens = shlex.split(cmdline)
+    except ValueError:
+        tokens = cmdline.split()
+    i = 1  # skip argv[0] (binary path)
+    while i < len(tokens):
+        t = tokens[i]
+        if t in ("--config", "-c") and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if t.startswith("--config="):
+            return t.split("=", 1)[1]
+        if not t.startswith("-"):
+            return t   # first non-flag positional = config file
+        i += 1
+    return None
+
+
+def _mpd_port_from_conf(conf_path: str) -> str | None:
+    try:
+        with open(conf_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("#"):
+                    continue
+                m = re.match(r'^port\s+"(\d+)"', s)
+                if m:
+                    return m.group(1)
+                m = re.match(r'^bind_to_address\s+"[^"]*:(\d+)"', s)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return None
+
+
 # ── page routes ───────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    return render_template("index.html", groups=_groups())
+    return render_template(
+        "index.html",
+        groups=_groups(),
+        topcpu_threshold=TOPCPU_THRESHOLD,
+        monitor_interval=MONITOR_INTERVAL,
+    )
 
 
 @app.route("/details/<cmd_id>")
@@ -292,6 +347,76 @@ def qconnect_log():
         return jsonify({"ok": True, "content": "(log file not found)"})
     except OSError as e:
         return jsonify({"ok": False, "content": str(e)})
+
+
+@app.route("/mpd/info")
+def mpd_info():
+    try:
+        r = subprocess.run(
+            ["ps", "-C", "mpd", "-o", "pcpu,args", "--no-header"],
+            capture_output=True, text=True, timeout=5,
+        )
+        cpu_total = 0.0
+        conf = None
+        for line in r.stdout.splitlines():
+            parts = line.split(None, 1)
+            if not parts:
+                continue
+            try:
+                cpu_total += float(parts[0])
+            except ValueError:
+                pass
+            if conf is None and len(parts) > 1:
+                conf = _mpd_conf_from_cmdline(parts[1].strip())
+
+        # Fallback: probe common default config paths
+        if not conf:
+            for p in ("/etc/mpd.conf",
+                      os.path.expanduser("~/.config/mpd/mpd.conf"),
+                      os.path.expanduser("~/.mpdconf")):
+                if os.path.isfile(p):
+                    conf = p
+                    break
+
+        running = bool(r.stdout.strip())
+        port = _mpd_port_from_conf(conf) if conf else None
+        return jsonify({
+            "ok":      True,
+            "running": running,
+            "cpu":     round(cpu_total, 1),
+            "conf":    conf  or "(unknown)",
+            "port":    port  or "6600",
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "timeout"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/system/topcpu")
+def system_topcpu():
+    try:
+        r = subprocess.run(
+            ["ps", "-eo", "user,pid,pcpu,comm", "--sort=-%cpu", "--no-header"],
+            capture_output=True, text=True, timeout=5,
+        )
+        procs = []
+        for line in r.stdout.splitlines():
+            parts = line.split(None, 3)
+            if len(parts) < 4:
+                continue
+            try:
+                cpu = float(parts[2])
+            except ValueError:
+                continue
+            if cpu < TOPCPU_THRESHOLD:
+                break   # list is sorted descending
+            procs.append({"user": parts[0], "pid": parts[1], "cpu": cpu, "name": parts[3]})
+        return jsonify({"ok": True, "procs": procs, "threshold": TOPCPU_THRESHOLD})
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "timeout"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 @app.route("/brutefir/cpu")
