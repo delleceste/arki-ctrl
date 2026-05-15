@@ -307,7 +307,7 @@
     <div id="srv-dot"></div>
 </header>
 
-{% for group_name, group_label, cmds in groups %}
+{% macro render_group(group_name, group_label, cmds) %}
 <div class="card">
     <div class="card-title">{{ group_label }}</div>
 
@@ -360,21 +360,9 @@
     {% endfor %}
 
 </div>
-{% endfor %}
+{% endmacro %}
 
-<!-- Confirm dialog -->
-<div id="overlay">
-    <div class="dialog">
-        <h3 id="dlg-title"></h3>
-        <p  id="dlg-msg"></p>
-        <div class="dialog-btns">
-            <button id="dlg-cancel" onclick="hideConfirm()">Cancel</button>
-            <button id="dlg-ok">Confirm</button>
-        </div>
-    </div>
-</div>
-
-<!-- Qobuz Connect now-playing panel -->
+<!-- Qobuz Connect now-playing panel (top) -->
 <div class="card">
     <div class="card-title qc-card-title">
         <span>Qobuz Connect</span>
@@ -392,6 +380,23 @@
     </div>
 </div>
 
+<!-- Command groups (all except system) -->
+{% for group_name, group_label, cmds in groups if group_name != 'system' %}
+{{ render_group(group_name, group_label, cmds) }}
+{% endfor %}
+
+<!-- Confirm dialog -->
+<div id="overlay">
+    <div class="dialog">
+        <h3 id="dlg-title"></h3>
+        <p  id="dlg-msg"></p>
+        <div class="dialog-btns">
+            <button id="dlg-cancel" onclick="hideConfirm()">Cancel</button>
+            <button id="dlg-ok">Confirm</button>
+        </div>
+    </div>
+</div>
+
 <!-- Brutefir CPU panel -->
 <div class="card">
     <div class="card-title">Brutefir CPU</div>
@@ -399,6 +404,11 @@
         <span style="color:var(--muted);font-style:italic">loading…</span>
     </div>
 </div>
+
+<!-- System group (reboot / poweroff) at the bottom -->
+{% for group_name, group_label, cmds in groups if group_name == 'system' %}
+{{ render_group(group_name, group_label, cmds) }}
+{% endfor %}
 
 <footer><a href="/readme">README</a></footer>
 
