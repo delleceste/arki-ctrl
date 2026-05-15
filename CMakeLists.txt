@@ -1,17 +1,17 @@
 cmake_minimum_required(VERSION 3.16)
-project(arkictrl VERSION 1.0.0 LANGUAGES NONE)
 
 # ── options ────────────────────────────────────────────────────────────────
 option(USER_INSTALL "Install as a systemd --user service (no root required)" OFF)
 
 # ── install prefix default ─────────────────────────────────────────────────
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-    if(USER_INSTALL)
-        set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local" CACHE PATH "Installation prefix" FORCE)
-    else()
-        set(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Installation prefix" FORCE)
-    endif()
+# Set the cache entry BEFORE project() so project() sees it as already set
+# and never overwrites it with /usr/local.  Without FORCE, an explicit
+# -DCMAKE_INSTALL_PREFIX=... on the command line (already in cache) still wins.
+if(USER_INSTALL)
+    set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local" CACHE PATH "Installation prefix")
 endif()
+
+project(arkictrl VERSION 1.0.0 LANGUAGES NONE)
 
 # ── check Python 3 ────────────────────────────────────────────────────────
 find_program(PYTHON3 python3 REQUIRED)
